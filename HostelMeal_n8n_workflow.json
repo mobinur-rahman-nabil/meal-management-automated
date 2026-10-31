@@ -1,0 +1,218 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -768,
+        -400
+      ],
+      "id": "52ddbd93-5e9b-4f0d-8d8c-f8f5e6f97c00",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "fileSelector": "/files/mealsheet.xlsx",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -560,
+        -240
+      ],
+      "id": "b0e1e2af-9cb7-4f52-bcc3-58795a44bf48",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "sheetName": "={{ $json.sheetName }}"
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        -240
+      ],
+      "id": "e5d659ce-4d35-45ec-a797-2ed90b152b34",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sheets = [\n  \"March2025\", \"April2025\", \"May2025\", \"June2025\", \"July2025\", \"August2025\",\n  \"September2025\", \"October2025\", \"Nocember2025\", \"December2025\", \"January2026\", \"February2026\",\n  \"March2026\", \"April2026\", \"May2026\", \"June2026\", \"July2026\", \"August2026\",\n  \"September2026\", \"Octobe2026\"\n];\n\nconst fileBinary = $input.first().binary;\n\nreturn sheets.map(name => ({\n  json: { sheetName: name },\n  binary: fileBinary\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -400
+      ],
+      "id": "7728f100-5116-47d6-894b-0aea31cdd748",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst sheets = [\n  \"March2025\", \"April2025\", \"May2025\", \"June2025\", \"July2025\", \"August2025\",\n  \"September2025\", \"October2025\", \"Nocember 2025\", \"December2025\", \"January2026\", \"February2026\",\n  \"March2026\", \"April2026\", \"May2026\", \"June2026\", \"July2026\", \"August2026\",\n  \"Septembe2026\", \"Octobe2026\"\n];\n\nconst memberStats = {};\nconst monthlyStats = {};\nlet totalLunch = 0;\nlet totalDinner = 0;\nlet totalGuestMeals = 0;\nlet activeDaysCount = 0;\nlet zeroMealDaysCount = 0;\n\nfor (const item of items) {\n  const row = item.json;\n  const keys = Object.keys(row);\n  if (keys.length === 0) continue;\n\n  // Identify which of the 20 sheets this row came from\n  const sheetIdx = item.pairedItem?.item ?? 0;\n  const monthName = sheets[sheetIdx] || `Sheet_${sheetIdx + 1}`;\n\n  // Pair each Member column (Lunch) with the following __EMPTY column (Dinner)\n  const pairs = [];\n  for (let i = 0; i < keys.length; i++) {\n    const key = keys[i];\n    if (!key.startsWith(\"__EMPTY\")) {\n      const nextKey = keys[i + 1] && keys[i + 1].startsWith(\"__EMPTY\") ? keys[i + 1] : null;\n      pairs.push({ member: key.trim(), lunchKey: key, dinnerKey: nextKey });\n    }\n  }\n\n  // Skip text sub-headers (e.g., \"Lunch\"/\"Dinner\") or bottom \"Total\" summary rows (>10 meals in 1 slot)\n  let isSummaryOrHeaderRow = false;\n  let rowMealsTotal = 0;\n\n  for (const p of pairs) {\n    const lVal = row[p.lunchKey];\n    const dVal = p.dinnerKey ? row[p.dinnerKey] : 0;\n\n    if (typeof lVal === \"string\" && isNaN(Number(lVal))) isSummaryOrHeaderRow = true;\n    if (typeof dVal === \"string\" && isNaN(Number(dVal))) isSummaryOrHeaderRow = true;\n\n    const lNum = Number(lVal) || 0;\n    const dNum = Number(dVal) || 0;\n\n    // A single person doesn't eat >10 lunches in one day; that indicates a monthly sum row\n    if (lNum > 10 || dNum > 10 || lNum < 0 || dNum < 0) {\n      isSummaryOrHeaderRow = true;\n    }\n    rowMealsTotal += lNum + dNum;\n  }\n\n  if (isSummaryOrHeaderRow) continue;\n\n  if (rowMealsTotal === 0) {\n    zeroMealDaysCount++;\n  } else {\n    activeDaysCount++;\n  }\n\n  if (!monthlyStats[monthName]) {\n    monthlyStats[monthName] = { lunch: 0, dinner: 0, total: 0, active_days: 0 };\n  }\n  if (rowMealsTotal > 0) monthlyStats[monthName].active_days++;\n\n  // Accumulate Lunch, Dinner, and Guest Meals per member and per month\n  for (const p of pairs) {\n    const lunch = Number(row[p.lunchKey]) || 0;\n    const dinner = p.dinnerKey ? (Number(row[p.dinnerKey]) || 0) : 0;\n\n    if (!memberStats[p.member]) {\n      memberStats[p.member] = {\n        lunch: 0,\n        dinner: 0,\n        total_meals: 0,\n        guest_meals: 0,\n        lunch_skipped_days: 0,\n        dinner_skipped_days: 0\n      };\n    }\n\n    memberStats[p.member].lunch += lunch;\n    memberStats[p.member].dinner += dinner;\n    memberStats[p.member].total_meals += lunch + dinner;\n\n    // Count guest meals (when a member takes >1 meal in a single Lunch or Dinner slot)\n    const guestInSlot = Math.max(0, lunch - 1) + Math.max(0, dinner - 1);\n    memberStats[p.member].guest_meals += guestInSlot;\n    totalGuestMeals += guestInSlot;\n\n    if (rowMealsTotal > 0) {\n      if (lunch === 0) memberStats[p.member].lunch_skipped_days++;\n      if (dinner === 0) memberStats[p.member].dinner_skipped_days++;\n    }\n\n    monthlyStats[monthName].lunch += lunch;\n    monthlyStats[monthName].dinner += dinner;\n    monthlyStats[monthName].total += lunch + dinner;\n\n    totalLunch += lunch;\n    totalDinner += dinner;\n  }\n}\n\nreturn [{\n  json: {\n    report_period: \"March 2025 - October 2026 (20 Months)\",\n    overall_summary: {\n      total_meals_served: totalLunch + totalDinner,\n      total_lunch_served: totalLunch,\n      total_dinner_served: totalDinner,\n      lunch_vs_dinner_ratio: `${ ((totalLunch / Math.max(1, totalLunch + totalDinner)) * 100).toFixed(1) }% Lunch / ${ ((totalDinner / Math.max(1, totalLunch + totalDinner)) * 100).toFixed(1) }% Dinner`,\n      total_guest_meals: totalGuestMeals,\n      active_hostel_days: activeDaysCount,\n      zero_meal_closed_days: zeroMealDaysCount\n    },\n    member_breakdown: memberStats,\n    monthly_breakdown: monthlyStats\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        -400
+      ],
+      "id": "c8e00b46-ad33-4060-862f-45d924f30702",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Act as a senior Hostel Operations & Food Cost Analyst. Analyze this 20-month hostel meal dataset (March 2025 – October 2026):\n\n{{ JSON.stringify($json, null, 2) }}\n\nGenerate a \"Smart Hostel Management Insight Report\" in clean HTML (using <h2>, <h3>, <ul>, <li>, <strong>, and <table> tags, without <html> or <body> wrappers) covering:\n1. Executive Summary (Total meals served, active vs. closed days, and Lunch vs. Dinner ratio).\n2. Member & Guest Meal Patterns (Compare Nabil, Imran, Sanim, Raiyan, etc. on total meals, skipped Lunch/Dinner days, and guest meals).\n3. 3 Actionable Cost & Waste Reduction Recommendations backed by exact numbers from the data.Act as a senior Hostel Operations & Food Cost Analyst. Analyze this 20-month hostel meal dataset (March 2025 – October 2026):\n\n{{ JSON.stringify($json, null, 2) }}\n\nGenerate a \"Smart Hostel Management Insight Report\" in clean HTML (using <h2>, <h3>, <ul>, <li>, <strong>, and <table> tags, without <html> or <body> wrappers) covering:\n1. Executive Summary (Total meals served, active vs. closed days, and Lunch vs. Dinner ratio).\n2. Member & Guest Meal Patterns (Compare Nabil, Imran, Sanim, Raiyan, etc. on total meals, skipped Lunch/Dinner days, and guest meals).\n3. 3 Actionable Cost & Waste Reduction Recommendations backed by exact numbers from the data.",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        128,
+        -432
+      ],
+      "id": "9b300d57-d595-4e62-8463-59805c5b3f25",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        128,
+        -256
+      ],
+      "id": "426af3a5-e1b7-46c7-b45d-18aadea8d722",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "WNb4mqfw69V03Jk4",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiOutput = $input.first().json.text || \"\";\nreturn [{ json: { reportHtml: aiOutput } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -272
+      ],
+      "id": "247b1816-28b1-4401-87c4-71e5fd29ad5a",
+      "name": "Code in JavaScript1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "80c7ef31-6bdd-4960-a9d4-b68f14b301b9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cb80db0c2da8dab69da68a9712b88e5f2e78c5592bce43c98c0416eb4adfd08c"
+  },
+  "nodeGroups": [],
+  "id": "jz2yen5PJfUa2Wjx",
+  "tags": []
+}
